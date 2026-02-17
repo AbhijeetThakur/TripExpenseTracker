@@ -1,0 +1,7 @@
+{
+  "name": "Ujjain Trip Ledger",
+  "description": "Transparent expense tracking for the Pune to Ujjain group trip. Features mandatory receipt uploads and public accountability.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
