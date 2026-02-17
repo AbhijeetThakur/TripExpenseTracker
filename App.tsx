@@ -1,19 +1,42 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { GoogleGenAI, Type } from "@google/genai";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, updateDoc } from "firebase/firestore";
+import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
 import { Expense, ExpenseCategory, TripStats } from './types';
-import { analyzeReceipt } from './services/geminiService';
 
-const BUDGET_TOTAL = 500000; // Example: 5 Lakh INR Collected
+// --- CONFIGURATION ---
+const VOLUNTEER_PASSWORD = "Ujjain@2024";
+const BUDGET_TOTAL = 500000;
 const CATEGORIES: ExpenseCategory[] = ['Food', 'Water', 'Transport', 'Fine', 'Stay', 'Misc'];
 
+// Firebase Setup (Mock-ready)
+const firebaseConfig = {
+  apiKey: process.env.FB_API_KEY,
+  projectId: process.env.FB_PROJECT_ID,
+  storageBucket: process.env.FB_STORAGE_BUCKET,
+  appId: process.env.FB_APP_ID
+};
+
+const hasFirebase = !!process.env.FB_API_KEY;
+let db: any = null;
+let storage: any = null;
+
+if (hasFirebase) {
+  const app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  storage = getStorage(app);
+}
+
+// Gemini Setup
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// --- MAIN APP COMPONENT ---
 const App: React.FC = () => {
-  const [expenses, setExpenses] = useState<Expense[]>(() => {
-    const saved = localStorage.getItem('trip_expenses');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [isVolunteerMode, setIsVolunteerMode] = useState(false);
-  const [isVolunteerAccess, setIsVolunteerAccess] = useState(false); // Permission toggle
+  const [isVolunteerAccess, setIsVolunteerAccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<ExpenseCategory | 'All'>('All');
   const [selectedProof, setSelectedProof] = useState<string | null>(null);
@@ -25,10 +48,21 @@ const App: React.FC = () => {
   const [formImage, setFormImage] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
+  // Data Sync
   useEffect(() => {
-    localStorage.setItem('trip_expenses', JSON.stringify(expenses));
-  }, [expenses]);
+    if (hasFirebase) {
+      const q = query(collection(db, "expenses"), orderBy("timestamp", "desc"));
+      return onSnapshot(q, (snapshot) => {
+        const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Expense));
+        setExpenses(docs);
+      });
+    } else {
+      const saved = localStorage.getItem('trip_expenses');
+      if (saved) setExpenses(JSON.parse(saved));
+    }
+  }, []);
 
   const stats = useMemo<TripStats>(() => {
     const spent = expenses.reduce((acc, curr) => acc + curr.amount, 0);
@@ -40,15 +74,14 @@ const App: React.FC = () => {
   }, [expenses]);
 
   const filteredExpenses = useMemo(() => {
-    return expenses
-      .filter(e => {
-        const matchesSearch = e.title.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesCat = selectedCategory === 'All' || e.category === selectedCategory;
-        return matchesSearch && matchesCat;
-      })
-      .sort((a, b) => b.timestamp - a.timestamp);
+    return expenses.filter(e => {
+      const matchesSearch = e.title.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesCat = selectedCategory === 'All' || e.category === selectedCategory;
+      return matchesSearch && matchesCat;
+    });
   }, [expenses, searchTerm, selectedCategory]);
 
+  // AI & Image Logic
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -60,10 +93,31 @@ const App: React.FC = () => {
       
       setIsAnalyzing(true);
       try {
-        const data = await analyzeReceipt(base64);
-        setFormTitle(data.title);
-        setFormAmount(data.amount.toString());
-        setFormCategory(data.category as ExpenseCategory);
+        const model = 'gemini-3-flash-preview';
+        const response = await ai.models.generateContent({
+          model,
+          contents: {
+            parts: [
+              { inlineData: { mimeType: 'image/jpeg', data: base64.split(',')[1] } },
+              { text: "Extract: title, total amount, category (Food, Water, Transport, Fine, Stay, Misc). Return JSON." }
+            ]
+          },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                amount: { type: Type.NUMBER },
+                category: { type: Type.STRING }
+              }
+            }
+          }
+        });
+        const data = JSON.parse(response.text);
+        setFormTitle(data.title || '');
+        setFormAmount(data.amount?.toString() || '');
+        if (CATEGORIES.includes(data.category)) setFormCategory(data.category);
       } catch (err) {
         console.error("AI Analysis failed", err);
       } finally {
@@ -73,34 +127,50 @@ const App: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const saveExpense = () => {
+  const saveExpense = async () => {
     if (!formImage || !formTitle || !formAmount) return;
+    setIsUploading(true);
 
-    if (editingId) {
-      setExpenses(prev => prev.map(exp => exp.id === editingId ? {
-        ...exp,
+    try {
+      let finalImageUrl = formImage;
+      if (hasFirebase && formImage.startsWith('data:')) {
+        const storageRef = ref(storage, `receipts/${Date.now()}.jpg`);
+        await uploadString(storageRef, formImage, 'data_url');
+        finalImageUrl = await getDownloadURL(storageRef);
+      }
+
+      const expenseData = {
         title: formTitle,
         amount: parseFloat(formAmount),
         category: formCategory,
-        imageUrl: formImage,
-      } : exp));
-      setEditingId(null);
-    } else {
-      const newExpense: Expense = {
-        id: Date.now().toString(),
-        title: formTitle,
-        amount: parseFloat(formAmount),
-        category: formCategory,
-        imageUrl: formImage,
+        imageUrl: finalImageUrl,
         timestamp: Date.now(),
-        volunteerName: "Volunteer 1"
+        volunteerName: "Volunteer Team"
       };
-      setExpenses([newExpense, ...expenses]);
-    }
 
-    // Reset Form
-    resetForm();
-    setIsVolunteerMode(false);
+      if (editingId) {
+        if (hasFirebase) {
+          await updateDoc(doc(db, "expenses", editingId), expenseData);
+        } else {
+          setExpenses(prev => prev.map(e => e.id === editingId ? { ...e, ...expenseData } : e));
+        }
+      } else {
+        if (hasFirebase) {
+          await addDoc(collection(db, "expenses"), expenseData);
+        } else {
+          const newExp = { id: Date.now().toString(), ...expenseData };
+          const updated = [newExp, ...expenses];
+          setExpenses(updated);
+          localStorage.setItem('trip_expenses', JSON.stringify(updated));
+        }
+      }
+      resetForm();
+      setIsVolunteerMode(false);
+    } catch (err) {
+      alert("Error saving expense. Please check your connection.");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const resetForm = () => {
@@ -120,230 +190,178 @@ const App: React.FC = () => {
     setIsVolunteerMode(true);
   };
 
-  const deleteExpense = (id: string) => {
-    if (window.confirm("Are you sure you want to delete this expense record?")) {
-      setExpenses(prev => prev.filter(exp => exp.id !== id));
+  const deleteExpense = async (id: string) => {
+    if (!window.confirm("Delete this record permanently?")) return;
+    if (hasFirebase) {
+      await deleteDoc(doc(db, "expenses", id));
+    } else {
+      const updated = expenses.filter(e => e.id !== id);
+      setExpenses(updated);
+      localStorage.setItem('trip_expenses', JSON.stringify(updated));
     }
   };
 
-  const toggleVolunteerMode = () => {
-    if (isVolunteerMode) {
-      resetForm();
+  const handleVolunteerLogin = () => {
+    if (isVolunteerAccess) {
+      setIsVolunteerAccess(false);
+      setIsVolunteerMode(false);
+    } else {
+      const pw = prompt("Enter Volunteer Password:");
+      if (pw === VOLUNTEER_PASSWORD) {
+        setIsVolunteerAccess(true);
+      } else {
+        alert("Incorrect Password");
+      }
     }
-    setIsVolunteerMode(!isVolunteerMode);
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans pb-20">
-      {/* Sticky Header */}
-      <header className="sticky top-0 z-30 bg-indigo-900 text-white shadow-xl px-4 py-4 safe-top">
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex flex-col">
-            <h1 className="text-xl font-black tracking-tight">PUNE ➔ UJJAIN</h1>
-            <label className="flex items-center gap-2 mt-1 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={isVolunteerAccess} 
-                onChange={() => setIsVolunteerAccess(!isVolunteerAccess)}
-                className="w-3 h-3 rounded text-indigo-600 focus:ring-indigo-500"
-              />
-              <span className="text-[9px] uppercase font-bold tracking-widest text-indigo-300">Volunteer Access</span>
-            </label>
-          </div>
-          
-          {isVolunteerAccess && (
+    <div className="min-h-screen bg-slate-50 flex flex-col pb-20 select-none">
+      {/* Analytics Header */}
+      <header className="sticky top-0 z-40 bg-indigo-950 text-white shadow-2xl safe-top">
+        <div className="px-5 py-4">
+          <div className="flex justify-between items-center mb-5">
+            <div>
+              <h1 className="text-xl font-black tracking-tighter flex items-center gap-2">
+                <span className="bg-orange-500 w-2 h-6 rounded-full"></span>
+                EXPENSE LEDGER
+              </h1>
+              <p className="text-[10px] font-bold opacity-40 uppercase tracking-[0.2em]">Pune to Ujjain Journey</p>
+            </div>
             <button 
-              onClick={toggleVolunteerMode}
-              className={`px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${
-                isVolunteerMode ? 'bg-red-500' : 'bg-orange-500 shadow-lg shadow-orange-900/40'
+              onClick={handleVolunteerLogin}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                isVolunteerAccess ? 'bg-indigo-700 text-indigo-200' : 'bg-white/10 text-white/60'
               }`}
             >
-              {isVolunteerMode ? 'Cancel' : 'Add Expense'}
+              {isVolunteerAccess ? 'Volunteer: ON' : 'Public View'}
             </button>
-          )}
-        </div>
-        
-        <div className="grid grid-cols-3 gap-2">
-          <div className="bg-white/10 p-2 rounded-lg backdrop-blur-sm border border-white/5">
-            <p className="text-[10px] opacity-60 uppercase font-bold">Collected</p>
-            <p className="text-sm font-mono font-bold">₹{stats.totalCollected.toLocaleString()}</p>
           </div>
-          <div className="bg-white/10 p-2 rounded-lg backdrop-blur-sm border border-white/5">
-            <p className="text-[10px] opacity-60 uppercase font-bold">Spent</p>
-            <p className="text-sm font-mono font-bold text-orange-300">₹{stats.totalSpent.toLocaleString()}</p>
-          </div>
-          <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm border border-white/10 ring-1 ring-white/20">
-            <p className="text-[10px] opacity-60 uppercase font-bold">Balance</p>
-            <p className="text-sm font-mono font-bold text-green-300">₹{stats.remaining.toLocaleString()}</p>
+
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: 'Collected', val: stats.totalCollected, color: 'text-white' },
+              { label: 'Spent', val: stats.totalSpent, color: 'text-orange-400' },
+              { label: 'Balance', val: stats.remaining, color: 'text-emerald-400' }
+            ].map(s => (
+              <div key={s.label} className="bg-white/5 p-3 rounded-2xl border border-white/10 backdrop-blur-md">
+                <p className="text-[9px] font-black uppercase opacity-40 mb-1 tracking-wider">{s.label}</p>
+                <p className={`text-sm font-mono font-black ${s.color}`}>₹{s.val.toLocaleString()}</p>
+              </div>
+            ))}
           </div>
         </div>
       </header>
 
-      <main className="flex-1 p-4 max-w-lg mx-auto w-full">
+      <main className="flex-1 p-5 max-w-lg mx-auto w-full">
         {isVolunteerMode ? (
-          <div className="bg-white p-6 rounded-3xl shadow-2xl border border-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
-            <h2 className="text-2xl font-black text-slate-800 mb-6">
-              {editingId ? 'Update Expense' : 'Log New Expense'}
-            </h2>
+          <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl border border-slate-200 animate-in slide-in-from-bottom-8 duration-500">
+            <div className="flex justify-between items-center mb-8">
+              <h2 className="text-2xl font-black text-slate-800">{editingId ? 'Update Record' : 'Log Expense'}</h2>
+              <button onClick={() => { setIsVolunteerMode(false); resetForm(); }} className="p-2 bg-slate-100 rounded-full text-slate-400">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
             
-            <div className="space-y-4">
-              <div className="relative">
-                <label className={`block w-full h-40 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all ${
-                  formImage ? 'border-green-500 bg-green-50' : 'border-slate-300 bg-slate-50 hover:bg-slate-100'
-                }`}>
-                  {formImage ? (
-                    <img src={formImage} className="w-full h-full object-cover rounded-2xl" alt="Preview" />
-                  ) : (
-                    <div className="text-center p-4">
-                      <div className="bg-indigo-100 p-3 rounded-full inline-block mb-2">
-                        <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                      </div>
-                      <p className="text-sm font-bold text-slate-500 uppercase tracking-tighter">Upload Proof First *</p>
+            <div className="space-y-5">
+              {/* IMAGE UPLOAD - THE HARD CONSTRAINT */}
+              <label className={`block w-full h-48 border-4 border-dashed rounded-[2rem] flex flex-col items-center justify-center cursor-pointer transition-all overflow-hidden relative ${
+                formImage ? 'border-emerald-400 bg-emerald-50/30' : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+              }`}>
+                {formImage ? (
+                  <img src={formImage} className="w-full h-full object-cover" alt="Receipt Preview" />
+                ) : (
+                  <div className="text-center p-6">
+                    <div className="bg-indigo-600 text-white p-4 rounded-3xl inline-block mb-3 shadow-lg shadow-indigo-200">
+                      <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                     </div>
-                  )}
-                  <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
-                </label>
-                {isAnalyzing && (
-                  <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] rounded-2xl flex items-center justify-center">
-                    <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="mt-2 text-xs font-bold text-indigo-600 animate-pulse uppercase">AI Parsing Receipt...</p>
-                    </div>
+                    <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Capture Proof (Required)</p>
                   </div>
                 )}
-              </div>
+                <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                {isAnalyzing && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center">
+                    <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="mt-3 text-[10px] font-black text-indigo-600 uppercase tracking-tighter animate-pulse">AI is Reading Proof...</p>
+                  </div>
+                )}
+              </label>
 
-              <div>
-                <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Expense Title</label>
-                <input 
-                  type="text" 
-                  value={formTitle} 
-                  onChange={e => setFormTitle(e.target.value)}
-                  placeholder="e.g. Dinner at Dhaba"
-                  className="w-full px-4 py-3 bg-slate-100 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-4">
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Amount (INR)</label>
-                  <input 
-                    type="number" 
-                    value={formAmount} 
-                    onChange={e => setFormAmount(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full px-4 py-3 bg-slate-100 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono font-bold"
-                  />
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-1.5 ml-1 block tracking-widest">Expense Title</label>
+                  <input type="text" value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="What was this for?" className="w-full px-5 py-4 bg-slate-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all font-bold text-slate-700" />
                 </div>
-                <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Category</label>
-                  <select 
-                    value={formCategory}
-                    onChange={e => setFormCategory(e.target.value as ExpenseCategory)}
-                    className="w-full px-4 py-3 bg-slate-100 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none appearance-none font-bold"
-                  >
-                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 mb-1.5 ml-1 block tracking-widest">Amount (₹)</label>
+                    <input type="number" value={formAmount} onChange={e => setFormAmount(e.target.value)} placeholder="0.00" className="w-full px-5 py-4 bg-slate-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all font-mono font-black text-lg text-indigo-600" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 mb-1.5 ml-1 block tracking-widest">Category</label>
+                    <select value={formCategory} onChange={e => setFormCategory(e.target.value as ExpenseCategory)} className="w-full px-5 py-4 bg-slate-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 outline-none font-bold text-slate-700 appearance-none">
+                      {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
                 </div>
               </div>
 
               <button 
                 onClick={saveExpense}
-                disabled={!formImage || !formTitle || !formAmount}
-                className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-indigo-200 disabled:bg-slate-200 disabled:shadow-none transition-all active:scale-95"
+                disabled={!formImage || !formTitle || !formAmount || isUploading || isAnalyzing}
+                className="w-full bg-indigo-600 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-2xl shadow-indigo-300 disabled:opacity-20 transition-all active:scale-95 flex items-center justify-center gap-3"
               >
-                {editingId ? 'Update Record' : 'Add to Public Ledger'}
+                {isUploading ? (
+                  <div className="w-6 h-6 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  editingId ? 'Update Record' : 'Post to Ledger'
+                )}
               </button>
             </div>
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Filter Bar */}
-            <div className="space-y-3">
-              <input 
-                type="text" 
-                placeholder="Search ledger..." 
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="w-full px-4 py-3 rounded-2xl border-none shadow-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-                <button 
-                  onClick={() => setSelectedCategory('All')}
-                  className={`flex-shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${
-                    selectedCategory === 'All' ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-500'
-                  }`}
-                >
-                  All
-                </button>
-                {CATEGORIES.map(cat => (
-                  <button 
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`flex-shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${
-                      selectedCategory === cat ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-500'
-                    }`}
-                  >
-                    {cat}
-                  </button>
-                ))}
-              </div>
+            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+              <button onClick={() => setSelectedCategory('All')} className={`flex-shrink-0 px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${selectedCategory === 'All' ? 'bg-indigo-600 text-white shadow-xl' : 'bg-white text-slate-400'}`}>All Items</button>
+              {CATEGORIES.map(cat => (
+                <button key={cat} onClick={() => setSelectedCategory(cat)} className={`flex-shrink-0 px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${selectedCategory === cat ? 'bg-indigo-600 text-white shadow-xl' : 'bg-white text-slate-400'}`}>{cat}</button>
+              ))}
             </div>
 
-            {/* Ledger Feed */}
             <div className="space-y-4">
               {filteredExpenses.length === 0 ? (
-                <div className="text-center py-20 opacity-30">
-                  <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="font-bold">No expenses found</p>
+                <div className="text-center py-24">
+                  <div className="bg-slate-200 w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-6 opacity-20">
+                    <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </div>
+                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">No transactions logged</p>
                 </div>
               ) : (
                 filteredExpenses.map(expense => (
-                  <div key={expense.id} className="relative bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex gap-4 items-center animate-in slide-in-from-left-2 duration-300 group">
+                  <div key={expense.id} className="group bg-white p-4 rounded-[2rem] shadow-sm border border-slate-100 flex gap-4 items-center active:scale-[0.98] transition-all">
                     <div 
-                      className="w-16 h-16 rounded-2xl overflow-hidden flex-shrink-0 cursor-pointer border border-slate-100 shadow-inner"
+                      className="w-16 h-16 rounded-[1.25rem] overflow-hidden flex-shrink-0 cursor-pointer border border-slate-100 shadow-inner"
                       onClick={() => setSelectedProof(expense.imageUrl)}
                     >
-                      <img src={expense.imageUrl} className="w-full h-full object-cover" alt="Receipt" />
+                      <img src={expense.imageUrl} className="w-full h-full object-cover" alt="Proof" />
                     </div>
                     
                     <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-start">
-                        <p className="text-[10px] font-black uppercase text-indigo-500 mb-0.5 tracking-widest">{expense.category}</p>
-                        <p className="text-[10px] text-slate-400">{new Date(expense.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                      <div className="flex justify-between items-start mb-0.5">
+                        <span className="text-[9px] font-black uppercase text-indigo-500 tracking-[0.15em]">{expense.category}</span>
+                        <span className="text-[9px] font-bold text-slate-300 font-mono">{new Date(expense.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
-                      <h3 className="font-bold text-slate-800 truncate pr-8">{expense.title}</h3>
-                      <p className="text-[10px] text-slate-400 uppercase tracking-tighter">By {expense.volunteerName}</p>
-                    </div>
-
-                    <div className="text-right flex flex-col items-end">
-                      <p className="text-lg font-black text-slate-900 font-mono">₹{expense.amount.toLocaleString()}</p>
+                      <h3 className="font-bold text-slate-800 text-sm truncate pr-4">{expense.title}</h3>
+                      <div className="flex justify-between items-end mt-1">
+                        <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter truncate opacity-60">REF: {expense.id.slice(-6).toUpperCase()}</p>
+                        <p className="text-lg font-black text-slate-900 font-mono">₹{expense.amount.toLocaleString()}</p>
+                      </div>
                       
-                      {/* Volunteer Controls */}
                       {isVolunteerAccess && (
-                        <div className="flex gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); startEdit(expense); }}
-                            className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-50 hover:text-indigo-600"
-                            title="Edit"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                            </svg>
-                          </button>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); deleteExpense(expense.id); }}
-                            className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-red-50 hover:text-red-600"
-                            title="Delete"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
+                        <div className="flex gap-2 mt-3 pt-3 border-t border-slate-50">
+                          <button onClick={() => startEdit(expense)} className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-xl text-[9px] font-black uppercase">Edit</button>
+                          <button onClick={() => deleteExpense(expense.id)} className="px-3 py-1.5 bg-red-50 text-red-600 rounded-xl text-[9px] font-black uppercase">Delete</button>
                         </div>
                       )}
                     </div>
@@ -355,33 +373,38 @@ const App: React.FC = () => {
         )}
       </main>
 
+      {/* Floating Action Bar (Volunteer Only) */}
+      {isVolunteerAccess && !isVolunteerMode && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <button 
+            onClick={() => setIsVolunteerMode(true)}
+            className="w-16 h-16 bg-orange-500 text-white rounded-[1.5rem] shadow-2xl shadow-orange-300 flex items-center justify-center active:scale-90 transition-all border-4 border-white"
+          >
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg>
+          </button>
+        </div>
+      )}
+
       {/* Proof Modal */}
       {selectedProof && (
         <div 
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-6 animate-in fade-in duration-300"
+          className="fixed inset-0 z-[100] bg-indigo-950/90 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in duration-300"
           onClick={() => setSelectedProof(null)}
         >
-          <div className="relative max-w-full max-h-full">
+          <div className="relative w-full max-w-sm">
             <button className="absolute -top-12 right-0 text-white p-2">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
-            <img 
-              src={selectedProof} 
-              className="max-w-full max-h-[80vh] rounded-3xl shadow-2xl object-contain border-4 border-white/20" 
-              alt="Proof Full Resolution" 
-            />
-            <div className="mt-4 text-center">
-              <p className="text-white text-sm font-bold opacity-70">Tap anywhere to close</p>
+            <div className="bg-white p-2 rounded-[2.5rem] shadow-2xl overflow-hidden ring-4 ring-white/20">
+              <img src={selectedProof} className="w-full h-auto rounded-[2rem]" alt="Proof Enlarged" />
             </div>
+            <p className="text-white/50 text-center mt-6 text-[10px] font-black uppercase tracking-[0.2em]">Full Accountability Ledger</p>
           </div>
         </div>
       )}
       
-      {/* Footer Branding */}
-      <footer className="py-8 text-center opacity-30">
-        <p className="text-xs font-black uppercase tracking-widest">Digital Ledger • Pune to Ujjain 2024</p>
+      <footer className="py-10 text-center opacity-20 safe-bottom">
+        <p className="text-[9px] font-black uppercase tracking-[0.3em]">Pune ➔ Ujjain Digital Ledger 2024</p>
       </footer>
     </div>
   );
