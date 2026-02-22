@@ -15,7 +15,13 @@ import {
   updateDoc,
 } from "firebase/firestore/lite";
 
-type ExpenseCategory = "Food" | "Water" | "Transport" | "Fine" | "Stay" | "Misc";
+type ExpenseCategory =
+  | "Food"
+  | "Water"
+  | "Transport"
+  | "Fine"
+  | "Stay"
+  | "Misc";
 
 interface ExpenseRecord {
   id: string;
@@ -40,7 +46,14 @@ interface AuthSession {
   volunteerName?: string;
 }
 
-const CATEGORIES: ExpenseCategory[] = ["Food", "Water", "Transport", "Fine", "Stay", "Misc"];
+const CATEGORIES: ExpenseCategory[] = [
+  "Food",
+  "Water",
+  "Transport",
+  "Fine",
+  "Stay",
+  "Misc",
+];
 const DEFAULT_VOLUNTEER_PASSWORD = "Ujjain@2024";
 const DEFAULT_ADMIN_PASSWORD = "Admin@2024";
 
@@ -62,18 +75,28 @@ function cleanEnvValue(v: unknown): string | undefined {
   return s;
 }
 
-const GEMINI_API_KEY = cleanEnvValue(env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY);
+const GEMINI_API_KEY = cleanEnvValue(
+  env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY,
+);
 const FB_API_KEY = cleanEnvValue(env.VITE_FB_API_KEY ?? env.FB_API_KEY);
-const FB_PROJECT_ID = cleanEnvValue(env.VITE_FB_PROJECT_ID ?? env.FB_PROJECT_ID);
+const FB_PROJECT_ID = cleanEnvValue(
+  env.VITE_FB_PROJECT_ID ?? env.FB_PROJECT_ID,
+);
 const FB_APP_ID = cleanEnvValue(env.VITE_FB_APP_ID ?? env.FB_APP_ID);
-const FB_AUTH_DOMAIN = cleanEnvValue(env.VITE_FB_AUTH_DOMAIN ?? env.FB_AUTH_DOMAIN);
-const ADMIN_PASSWORD = cleanEnvValue(env.VITE_ADMIN_PASSWORD ?? env.ADMIN_PASSWORD) ?? DEFAULT_ADMIN_PASSWORD;
+const FB_AUTH_DOMAIN = cleanEnvValue(
+  env.VITE_FB_AUTH_DOMAIN ?? env.FB_AUTH_DOMAIN,
+);
+const ADMIN_PASSWORD =
+  cleanEnvValue(env.VITE_ADMIN_PASSWORD ?? env.ADMIN_PASSWORD) ??
+  DEFAULT_ADMIN_PASSWORD;
 
 const firebaseConfig = {
   apiKey: FB_API_KEY,
   projectId: FB_PROJECT_ID,
   appId: FB_APP_ID,
-  authDomain: FB_AUTH_DOMAIN ?? (FB_PROJECT_ID ? `${FB_PROJECT_ID}.firebaseapp.com` : undefined),
+  authDomain:
+    FB_AUTH_DOMAIN ??
+    (FB_PROJECT_ID ? `${FB_PROJECT_ID}.firebaseapp.com` : undefined),
 };
 
 const hasFirebase = Boolean(FB_API_KEY && FB_PROJECT_ID && FB_APP_ID);
@@ -105,7 +128,10 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+function canvasToJpegBlob(
+  canvas: HTMLCanvasElement,
+  quality: number,
+): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
@@ -121,11 +147,19 @@ function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number): Promise<B
   });
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
   let timeoutId: number | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = globalThis.setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms / 1000}s. Check internet/Firebase config.`));
+      reject(
+        new Error(
+          `${label} timed out after ${ms / 1000}s. Check internet/Firebase config.`,
+        ),
+      );
     }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => {
@@ -176,7 +210,12 @@ async function compressImageToJpegDataUrl(
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, 0, 0, dstW, dstH);
 
-  if (shouldClose && source && "close" in source && typeof source.close === "function") {
+  if (
+    shouldClose &&
+    source &&
+    "close" in source &&
+    typeof source.close === "function"
+  ) {
     source.close();
   }
 
@@ -186,7 +225,9 @@ async function compressImageToJpegDataUrl(
 
 function normalizeCategory(value: unknown): ExpenseCategory {
   const category = String(value ?? "Misc");
-  return CATEGORIES.includes(category as ExpenseCategory) ? (category as ExpenseCategory) : "Misc";
+  return CATEGORIES.includes(category as ExpenseCategory)
+    ? (category as ExpenseCategory)
+    : "Misc";
 }
 
 function normalizeExpense(id: string, raw: unknown): ExpenseRecord {
@@ -196,7 +237,9 @@ function normalizeExpense(id: string, raw: unknown): ExpenseRecord {
     title: String(data.title ?? ""),
     amount: Number(data.amount ?? 0),
     category: normalizeCategory(data.category),
-    receiptBase64: (data.receiptBase64 ?? data.imageUrl ?? null) as string | null,
+    receiptBase64: (data.receiptBase64 ?? data.imageUrl ?? null) as
+      | string
+      | null,
     timestamp: Number(data.timestamp ?? Date.now()),
     updatedAt: data.updatedAt ? Number(data.updatedAt) : undefined,
     volunteerName: String(data.volunteerName ?? "Volunteer"),
@@ -219,7 +262,8 @@ function readStoredSettings(): LedgerSettings {
     return {
       budgetTotal: Number(parsed.budgetTotal ?? fallback.budgetTotal),
       volunteerPasswords:
-        parsed.volunteerPasswords && typeof parsed.volunteerPasswords === "object"
+        parsed.volunteerPasswords &&
+        typeof parsed.volunteerPasswords === "object"
           ? parsed.volunteerPasswords
           : fallback.volunteerPasswords,
     };
@@ -251,7 +295,9 @@ export default function App() {
   const [settings, setSettings] = useState<LedgerSettings>(readStoredSettings);
   const [session, setSession] = useState<AuthSession>(readStoredSession);
 
-  const [selectedCategory, setSelectedCategory] = useState<"All" | ExpenseCategory>("All");
+  const [selectedCategory, setSelectedCategory] = useState<
+    "All" | ExpenseCategory
+  >("All");
   const [selectedProof, setSelectedProof] = useState<string | null>(null);
 
   const [isVolunteerMode, setIsVolunteerMode] = useState(false);
@@ -275,7 +321,8 @@ export default function App() {
   const [newVolunteerPassword, setNewVolunteerPassword] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
-  const isVolunteerAccess = session.role === "volunteer" || session.role === "admin";
+  const isVolunteerAccess =
+    session.role === "volunteer" || session.role === "admin";
   const isAdmin = session.role === "admin";
 
   useEffect(() => {
@@ -287,10 +334,17 @@ export default function App() {
     async function loadData() {
       try {
         if (hasFirebase && db) {
-          const expensesQuery = query(collection(db, "expenses"), orderBy("timestamp", "desc"));
+          const expensesQuery = query(
+            collection(db, "expenses"),
+            orderBy("timestamp", "desc"),
+          );
           const [expensesSnap, settingsSnap] = await Promise.all([
             withTimeout(getDocs(expensesQuery), 20000, "Fetch expenses"),
-            withTimeout(getDoc(doc(db, "app_settings", "ledger")), 15000, "Fetch settings"),
+            withTimeout(
+              getDoc(doc(db, "app_settings", "ledger")),
+              15000,
+              "Fetch settings",
+            ),
           ]);
           if (cancelled) return;
           const mapped = expensesSnap.docs
@@ -302,7 +356,8 @@ export default function App() {
             const merged: LedgerSettings = {
               budgetTotal: Number(remote.budgetTotal ?? 500000),
               volunteerPasswords:
-                remote.volunteerPasswords && typeof remote.volunteerPasswords === "object"
+                remote.volunteerPasswords &&
+                typeof remote.volunteerPasswords === "object"
                   ? remote.volunteerPasswords
                   : { Volunteer: DEFAULT_VOLUNTEER_PASSWORD },
             };
@@ -313,7 +368,9 @@ export default function App() {
 
         const storedExpenses = localStorage.getItem(EXPENSES_STORAGE_KEY);
         if (!storedExpenses) return;
-        const parsed = JSON.parse(storedExpenses) as Array<Partial<ExpenseRecord>>;
+        const parsed = JSON.parse(storedExpenses) as Array<
+          Partial<ExpenseRecord>
+        >;
         const normalized = parsed
           .map((e) => normalizeExpense(String(e.id ?? Date.now()), e))
           .sort(sortByLatest);
@@ -331,7 +388,10 @@ export default function App() {
   }, []);
 
   const stats = useMemo(() => {
-    const totalSpent = expenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+    const totalSpent = expenses.reduce(
+      (acc, curr) => acc + (Number(curr.amount) || 0),
+      0,
+    );
     return {
       totalCollected: Number(settings.budgetTotal || 0),
       totalSpent,
@@ -360,10 +420,15 @@ export default function App() {
     (async () => {
       setIsAnalyzing(true);
       try {
-        const compressed = await compressImageToJpegDataUrl(file, { maxWidth: 800, quality: 0.7 });
+        const compressed = await compressImageToJpegDataUrl(file, {
+          maxWidth: 800,
+          quality: 0.7,
+        });
         const approxBytes = estimateDataUrlBytes(compressed);
         if (approxBytes > 950_000) {
-          alert("Image is too large after compression. Please crop or retake the receipt.");
+          alert(
+            "Image is too large after compression. Please crop or retake the receipt.",
+          );
           setFormImage(null);
           return;
         }
@@ -406,7 +471,10 @@ export default function App() {
         };
         setFormTitle(data.title ?? "");
         setFormAmount(data.amount === undefined ? "" : String(data.amount));
-        if (data.category && CATEGORIES.includes(data.category as ExpenseCategory)) {
+        if (
+          data.category &&
+          CATEGORIES.includes(data.category as ExpenseCategory)
+        ) {
           setFormCategory(data.category as ExpenseCategory);
         }
       } catch (err) {
@@ -432,30 +500,48 @@ export default function App() {
 
     setIsUploading(true);
     try {
-      const editor = session.role === "volunteer" ? session.volunteerName || "Volunteer" : "Admin";
-      const existing = editingId ? expenses.find((e) => e.id === editingId) : undefined;
+      const editor =
+        session.role === "volunteer"
+          ? session.volunteerName || "Volunteer"
+          : "Admin";
+      const existing = editingId
+        ? expenses.find((e) => e.id === editingId)
+        : undefined;
       const expenseData: Omit<ExpenseRecord, "id"> = {
         title: formTitle.trim(),
         amount: Number.parseFloat(formAmount),
         category: formCategory,
         receiptBase64: formImage,
         timestamp: existing?.timestamp ?? Date.now(),
-        updatedAt: existing ? Date.now() : undefined,
         volunteerName: existing?.volunteerName || editor,
+        ...(existing ? { updatedAt: Date.now() } : {}),
       };
 
       if (editingId) {
         if (hasFirebase && db) {
-          await withTimeout(updateDoc(doc(db, "expenses", editingId), expenseData), 45000, "Update expense");
+          await withTimeout(
+            updateDoc(doc(db, "expenses", editingId), expenseData),
+            45000,
+            "Update expense",
+          );
         }
         applyLocalExpenses(
-          expenses.map((ex) => (ex.id === editingId ? { ...ex, ...expenseData, id: editingId } : ex)),
+          expenses.map((ex) =>
+            ex.id === editingId ? { ...ex, ...expenseData, id: editingId } : ex,
+          ),
         );
       } else if (hasFirebase && db) {
-        const docRef = await withTimeout(addDoc(collection(db, "expenses"), expenseData), 45000, "Save expense");
+        const docRef = await withTimeout(
+          addDoc(collection(db, "expenses"), expenseData),
+          45000,
+          "Save expense",
+        );
         applyLocalExpenses([{ ...expenseData, id: docRef.id }, ...expenses]);
       } else {
-        applyLocalExpenses([{ ...expenseData, id: Date.now().toString() }, ...expenses]);
+        applyLocalExpenses([
+          { ...expenseData, id: Date.now().toString() },
+          ...expenses,
+        ]);
       }
 
       resetForm();
@@ -483,7 +569,11 @@ export default function App() {
     if (!globalThis.confirm("Delete this record permanently?")) return;
     try {
       if (hasFirebase && db) {
-        await withTimeout(deleteDoc(doc(db, "expenses", id)), 45000, "Delete expense");
+        await withTimeout(
+          deleteDoc(doc(db, "expenses", id)),
+          45000,
+          "Delete expense",
+        );
       }
       applyLocalExpenses(expenses.filter((ex) => ex.id !== id));
     } catch (err) {
@@ -538,7 +628,11 @@ export default function App() {
     setIsSavingSettings(true);
     try {
       if (hasFirebase && db) {
-        await withTimeout(setDoc(doc(db, "app_settings", "ledger"), next, { merge: true }), 30000, "Save settings");
+        await withTimeout(
+          setDoc(doc(db, "app_settings", "ledger"), next, { merge: true }),
+          30000,
+          "Save settings",
+        );
       }
       setSettings(next);
     } catch (err) {
@@ -588,33 +682,34 @@ export default function App() {
   let saveButtonLabel = "Post to Ledger";
   if (isUploading) saveButtonLabel = "Saving...";
   else if (editingId) saveButtonLabel = "Update Record";
-  const authChipLabel = session.role === "public" ? "Login" : `${session.role}: ON`;
+  const authChipLabel =
+    session.role === "public" ? "Login" : `${session.role}: ON`;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col pb-20 select-none">
-      <header className="sticky top-0 z-40 bg-indigo-950 text-white shadow-2xl safe-top">
-        <div className="px-5 py-4">
-          <div className="flex justify-between items-center mb-5 gap-3">
+    <div className="min-h-dvh bg-slate-200 flex flex-col select-none">
+      <header className="sticky top-0 z-40 bg-[#22004f] text-white shadow-2xl safe-top rounded-b-[2rem]">
+        <div className="px-5 pt-4 pb-5">
+          <div className="mb-5 space-y-3">
             <div>
-              <h1 className="text-xl font-black tracking-tighter flex items-center gap-2">
-                <span className="bg-orange-500 w-2 h-6 rounded-full" />
+              <h1 className="text-[2rem] font-black tracking-tight leading-[0.85] flex items-start gap-2">
+                <span className="bg-orange-500 w-1.5 h-7 rounded-full mt-1" />
                 <span>EXPENSE LEDGER</span>
               </h1>
-              <p className="text-[10px] font-bold opacity-40 uppercase tracking-[0.2em]">
+              <p className="text-[10px] font-bold opacity-45 uppercase tracking-[0.24em] mt-1 pl-3.5 break-words">
                 Pune - Gwalior - Pune
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-end gap-2 flex-wrap">
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-white/10"
+                className="px-3 py-2 rounded-2xl text-[9px] font-black uppercase tracking-[0.12em] bg-white/12 leading-tight whitespace-nowrap"
               >
                 {authChipLabel}
               </button>
               {session.role !== "public" && (
                 <button
                   onClick={handleLogout}
-                  className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-red-500/80"
+                  className="px-3 py-2 rounded-2xl text-[9px] font-black uppercase tracking-[0.12em] bg-rose-500 leading-tight whitespace-nowrap"
                 >
                   Logout
                 </button>
@@ -624,20 +719,39 @@ export default function App() {
 
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: "Collected", val: stats.totalCollected, color: "text-white" },
-              { label: "Spent", val: stats.totalSpent, color: "text-orange-400" },
-              { label: "Balance", val: stats.remaining, color: "text-emerald-400" },
+              {
+                label: "Collected",
+                val: stats.totalCollected,
+                color: "text-white",
+              },
+              {
+                label: "Spent",
+                val: stats.totalSpent,
+                color: "text-orange-400",
+              },
+              {
+                label: "Balance",
+                val: stats.remaining,
+                color: "text-emerald-400",
+              },
             ].map((s) => (
-              <div key={s.label} className="bg-white/5 p-3 rounded-2xl border border-white/10 backdrop-blur-md">
-                <p className="text-[9px] font-black uppercase opacity-40 mb-1 tracking-wider">{s.label}</p>
-                <p className={`text-sm font-mono font-black ${s.color}`}>₹{Number(s.val || 0).toLocaleString()}</p>
+              <div
+                key={s.label}
+                className="bg-white/5 p-3 rounded-2xl border border-white/10 backdrop-blur-md"
+              >
+                <p className="text-[9px] font-black uppercase opacity-40 mb-1 tracking-wider">
+                  {s.label}
+                </p>
+                <p className={`text-sm font-mono font-black ${s.color}`}>
+                  ₹{Number(s.val || 0).toLocaleString()}
+                </p>
               </div>
             ))}
           </div>
         </div>
       </header>
 
-      <main className="flex-1 p-5 max-w-lg mx-auto w-full space-y-5">
+      <main className="flex-1 p-5 pb-24 max-w-lg mx-auto w-full space-y-5">
         {isAdmin && (
           <div className="bg-white rounded-3xl border border-slate-200 p-4">
             <button
@@ -670,21 +784,29 @@ export default function App() {
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-2xl">
-                  <p className="text-[10px] font-black uppercase text-slate-500 mb-2">Volunteer Passwords</p>
+                  <p className="text-[10px] font-black uppercase text-slate-500 mb-2">
+                    Volunteer Passwords
+                  </p>
                   <div className="space-y-2 mb-3">
-                    {Object.entries(settings.volunteerPasswords).map(([name, password]) => (
-                      <div key={name} className="flex items-center justify-between bg-white rounded-xl px-3 py-2">
-                        <p className="text-xs font-bold text-slate-700">
-                          {name} <span className="text-slate-400">({password})</span>
-                        </p>
-                        <button
-                          onClick={() => handleDeleteVolunteer(name)}
-                          className="text-[10px] text-red-500 font-black uppercase"
+                    {Object.entries(settings.volunteerPasswords).map(
+                      ([name, password]) => (
+                        <div
+                          key={name}
+                          className="flex items-center justify-between bg-white rounded-xl px-3 py-2"
                         >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
+                          <p className="text-xs font-bold text-slate-700">
+                            {name}{" "}
+                            <span className="text-slate-400">({password})</span>
+                          </p>
+                          <button
+                            onClick={() => handleDeleteVolunteer(name)}
+                            className="text-[10px] text-red-500 font-black uppercase"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ),
+                    )}
                   </div>
                   <div className="grid grid-cols-1 gap-2">
                     <input
@@ -716,7 +838,9 @@ export default function App() {
         {isVolunteerMode ? (
           <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl border border-slate-200">
             <div className="flex justify-between items-center mb-8">
-              <h2 className="text-2xl font-black text-slate-800">{editingId ? "Update Record" : "Log Expense"}</h2>
+              <h2 className="text-2xl font-black text-slate-800">
+                {editingId ? "Update Record" : "Log Expense"}
+              </h2>
               <button
                 onClick={() => {
                   setIsVolunteerMode(false);
@@ -731,19 +855,34 @@ export default function App() {
             <div className="space-y-5">
               <label
                 className={`block w-full h-48 border-4 border-dashed rounded-[2rem] flex flex-col items-center justify-center cursor-pointer transition-all overflow-hidden relative ${
-                  formImage ? "border-emerald-400 bg-emerald-50/30" : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                  formImage
+                    ? "border-emerald-400 bg-emerald-50/30"
+                    : "border-slate-200 bg-slate-50 hover:bg-slate-100"
                 }`}
               >
                 {formImage ? (
-                  <img src={formImage} className="w-full h-full object-cover" alt="Receipt Preview" />
+                  <img
+                    src={formImage}
+                    className="w-full h-full object-cover"
+                    alt="Receipt Preview"
+                  />
                 ) : (
-                  <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Capture Proof (Required)</p>
+                  <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                    Capture Proof (Required)
+                  </p>
                 )}
-                <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                />
                 {isAnalyzing && (
                   <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center">
                     <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                    <p className="mt-3 text-[10px] font-black text-indigo-600 uppercase">Processing Proof...</p>
+                    <p className="mt-3 text-[10px] font-black text-indigo-600 uppercase">
+                      Processing Proof...
+                    </p>
                   </div>
                 )}
               </label>
@@ -765,7 +904,9 @@ export default function App() {
                 />
                 <select
                   value={formCategory}
-                  onChange={(ev) => setFormCategory(normalizeCategory(ev.target.value))}
+                  onChange={(ev) =>
+                    setFormCategory(normalizeCategory(ev.target.value))
+                  }
                   className="w-full px-5 py-4 bg-slate-100 rounded-2xl font-bold"
                 >
                   {CATEGORIES.map((c) => (
@@ -778,7 +919,13 @@ export default function App() {
 
               <button
                 onClick={saveExpense}
-                disabled={!formImage || !formTitle || !formAmount || isUploading || isAnalyzing}
+                disabled={
+                  !formImage ||
+                  !formTitle ||
+                  !formAmount ||
+                  isUploading ||
+                  isAnalyzing
+                }
                 className="w-full bg-indigo-600 text-white py-5 rounded-[1.5rem] font-black text-lg disabled:opacity-20"
               >
                 {saveButtonLabel}
@@ -791,7 +938,9 @@ export default function App() {
               <button
                 onClick={() => setSelectedCategory("All")}
                 className={`flex-shrink-0 px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest ${
-                  selectedCategory === "All" ? "bg-indigo-600 text-white" : "bg-white text-slate-400"
+                  selectedCategory === "All"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white text-slate-400"
                 }`}
               >
                 All Items
@@ -801,7 +950,9 @@ export default function App() {
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
                   className={`flex-shrink-0 px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest ${
-                    selectedCategory === cat ? "bg-indigo-600 text-white" : "bg-white text-slate-400"
+                    selectedCategory === cat
+                      ? "bg-indigo-600 text-white"
+                      : "bg-white text-slate-400"
                   }`}
                 >
                   {cat}
@@ -825,10 +976,17 @@ export default function App() {
                     <button
                       type="button"
                       className="w-16 h-16 rounded-[1.25rem] overflow-hidden flex-shrink-0 cursor-pointer border border-slate-100"
-                      onClick={() => expense.receiptBase64 && setSelectedProof(expense.receiptBase64)}
+                      onClick={() =>
+                        expense.receiptBase64 &&
+                        setSelectedProof(expense.receiptBase64)
+                      }
                     >
                       {expense.receiptBase64 ? (
-                        <img src={expense.receiptBase64} className="w-full h-full object-cover" alt="Proof" />
+                        <img
+                          src={expense.receiptBase64}
+                          className="w-full h-full object-cover"
+                          alt="Proof"
+                        />
                       ) : (
                         <div className="w-full h-full bg-slate-100" />
                       )}
@@ -847,12 +1005,16 @@ export default function App() {
                           })}
                         </span>
                       </div>
-                      <h3 className="font-bold text-slate-800 text-sm truncate pr-4">{expense.title}</h3>
+                      <h3 className="font-bold text-slate-800 text-sm truncate pr-4">
+                        {expense.title}
+                      </h3>
                       <div className="flex justify-between items-end mt-1">
                         <p className="text-[10px] text-slate-500 font-bold truncate">
                           By: {expense.volunteerName || "Volunteer"}
                         </p>
-                        <p className="text-lg font-black text-slate-900 font-mono">₹{Number(expense.amount || 0).toLocaleString()}</p>
+                        <p className="text-lg font-black text-slate-900 font-mono">
+                          ₹{Number(expense.amount || 0).toLocaleString()}
+                        </p>
                       </div>
 
                       {isVolunteerAccess && (
@@ -905,7 +1067,11 @@ export default function App() {
           <div className="relative z-10 w-full h-full flex items-center justify-center pointer-events-none">
             <div className="relative w-full max-w-sm pointer-events-auto">
               <div className="bg-white p-2 rounded-[2.5rem] shadow-2xl overflow-hidden">
-                <img src={selectedProof} className="w-full h-auto rounded-[2rem]" alt="Proof Enlarged" />
+                <img
+                  src={selectedProof}
+                  className="w-full h-auto rounded-[2rem]"
+                  alt="Proof Enlarged"
+                />
               </div>
             </div>
           </div>
@@ -919,7 +1085,9 @@ export default function App() {
               <button
                 onClick={() => setAuthRole("volunteer")}
                 className={`px-3 py-2 rounded-xl text-xs font-black uppercase ${
-                  authRole === "volunteer" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500"
+                  authRole === "volunteer"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-100 text-slate-500"
                 }`}
               >
                 Volunteer
@@ -927,7 +1095,9 @@ export default function App() {
               <button
                 onClick={() => setAuthRole("admin")}
                 className={`px-3 py-2 rounded-xl text-xs font-black uppercase ${
-                  authRole === "admin" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500"
+                  authRole === "admin"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-100 text-slate-500"
                 }`}
               >
                 Admin
@@ -945,7 +1115,9 @@ export default function App() {
               type="password"
               value={loginPassword}
               onChange={(e) => setLoginPassword(e.target.value)}
-              placeholder={authRole === "admin" ? "Admin password" : "Volunteer password"}
+              placeholder={
+                authRole === "admin" ? "Admin password" : "Volunteer password"
+              }
               className="w-full px-4 py-3 rounded-xl bg-slate-100"
             />
             <div className="flex gap-2">
@@ -969,12 +1141,11 @@ export default function App() {
         </div>
       )}
 
-      <footer className="py-10 text-center opacity-20 safe-bottom">
-        <p className="text-[9px] font-black uppercase tracking-[0.3em]">
-          Pune - Gwalior - Pune Digital Ledger 2026
+      <footer className="mt-auto pt-4 pb-6 text-center safe-bottom">
+        <p className="text-[10px] font-black uppercase tracking-[0.34em] text-slate-500/55">
+          Digital Ledger 2026
         </p>
       </footer>
     </div>
   );
 }
-
