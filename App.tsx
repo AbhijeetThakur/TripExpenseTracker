@@ -601,7 +601,7 @@ export default function App() {
                 <span>EXPENSE LEDGER</span>
               </h1>
               <p className="text-[10px] font-bold opacity-40 uppercase tracking-[0.2em]">
-                Pune to Ujjain Journey
+                Pune - Gwalior - Pune
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -968,6 +968,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <footer className="py-10 text-center opacity-20 safe-bottom">
+        <p className="text-[9px] font-black uppercase tracking-[0.3em]">
+          Pune - Gwalior - Pune Digital Ledger 2026
+        </p>
+      </footer>
     </div>
   );
 }

@@ -404,7 +404,7 @@ export default function App() {
                 EXPENSE LEDGER
               </h1>
               <p className="text-[10px] font-bold opacity-40 uppercase tracking-[0.2em]">
-                Pune to Ujjain Journey
+                Pune - Gwalior - Pune
               </p>
             </div>
             <button
@@ -764,7 +764,7 @@ export default function App() {
 
       <footer className="py-10 text-center opacity-20 safe-bottom">
         <p className="text-[9px] font-black uppercase tracking-[0.3em]">
-          Pune ➔ Ujjain Digital Ledger 2024
+          Pune - Gwalior - Pune Digital Ledger 2026
         </p>
       </footer>
     </div>
