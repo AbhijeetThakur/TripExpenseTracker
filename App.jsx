@@ -7,11 +7,11 @@ import {
   deleteDoc,
   doc,
   getFirestore,
-  onSnapshot,
+  getDocs,
   orderBy,
   query,
   updateDoc,
-} from "firebase/firestore";
+} from "firebase/firestore/lite";
 
 // --- CONFIGURATION ---
 const VOLUNTEER_PASSWORD = "Ujjain@2024";
@@ -20,16 +20,31 @@ const CATEGORIES = ["Food", "Water", "Transport", "Fine", "Stay", "Misc"];
 
 // Vite env (supports both VITE_* and legacy keys via define() in vite.config.ts)
 const env = import.meta.env ?? {};
-const GEMINI_API_KEY = env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY;
-const FB_API_KEY = env.VITE_FB_API_KEY ?? env.FB_API_KEY;
-const FB_PROJECT_ID = env.VITE_FB_PROJECT_ID ?? env.FB_PROJECT_ID;
-const FB_APP_ID = env.VITE_FB_APP_ID ?? env.FB_APP_ID;
+
+function cleanEnvValue(v) {
+  if (v === undefined || v === null) return undefined;
+  const s = String(v).trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
+    (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
+  ) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+const GEMINI_API_KEY = cleanEnvValue(env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY);
+const FB_API_KEY = cleanEnvValue(env.VITE_FB_API_KEY ?? env.FB_API_KEY);
+const FB_PROJECT_ID = cleanEnvValue(env.VITE_FB_PROJECT_ID ?? env.FB_PROJECT_ID);
+const FB_APP_ID = cleanEnvValue(env.VITE_FB_APP_ID ?? env.FB_APP_ID);
+const FB_AUTH_DOMAIN = cleanEnvValue(env.VITE_FB_AUTH_DOMAIN ?? env.FB_AUTH_DOMAIN);
 
 // Firebase Setup (Firestore only; no Storage)
 const firebaseConfig = {
   apiKey: FB_API_KEY,
   projectId: FB_PROJECT_ID,
   appId: FB_APP_ID,
+  authDomain: FB_AUTH_DOMAIN ?? (FB_PROJECT_ID ? `${FB_PROJECT_ID}.firebaseapp.com` : undefined),
 };
 
 const hasFirebase = !!(FB_API_KEY && FB_PROJECT_ID && FB_APP_ID);
@@ -72,6 +87,16 @@ function canvasToJpegBlob(canvas, quality) {
       quality,
     );
   });
+}
+
+function withTimeout(promise, ms, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms / 1000}s. Check internet/Firebase config.`));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 async function compressImageToJpegDataUrl(file, { maxWidth = 800, quality = 0.7 }) {
@@ -144,11 +169,34 @@ export default function App() {
   // Data Sync
   useEffect(() => {
     if (hasFirebase) {
+      let cancelled = false;
+      let shownError = false;
       const q = query(collection(db, "expenses"), orderBy("timestamp", "desc"));
-      return onSnapshot(q, (snapshot) => {
-        const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setExpenses(docs);
-      });
+
+      const loadExpenses = async () => {
+        try {
+          const snapshot = await withTimeout(getDocs(q), 20000, "Fetch expenses");
+          if (cancelled) return;
+          const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+          setExpenses(docs);
+        } catch (err) {
+          console.error("Firestore fetch failed", err);
+          if (!shownError) {
+            shownError = true;
+            const msg =
+              err && typeof err === "object" && "message" in err ? err.message : String(err);
+            alert(`Firestore connection error: ${msg}`);
+          }
+        }
+      };
+
+      loadExpenses();
+      const intervalId = setInterval(loadExpenses, 5000);
+
+      return () => {
+        cancelled = true;
+        clearInterval(intervalId);
+      };
     }
     const saved = localStorage.getItem("trip_expenses");
     if (saved) setExpenses(JSON.parse(saved));
@@ -254,6 +302,10 @@ export default function App() {
     setIsUploading(true);
 
     try {
+      if (hasFirebase && !db) {
+        throw new Error("Firestore is not initialized. Check your Firebase env variables.");
+      }
+
       const expenseData = {
         title: formTitle,
         amount: Number.parseFloat(formAmount),
@@ -265,7 +317,11 @@ export default function App() {
 
       if (editingId) {
         if (hasFirebase) {
-          await updateDoc(doc(db, "expenses", editingId), expenseData);
+          await withTimeout(
+            updateDoc(doc(db, "expenses", editingId), expenseData),
+            45000,
+            "Update expense",
+          );
         } else {
           setExpenses((prev) => {
             const updated = prev.map((ex) =>
@@ -276,7 +332,7 @@ export default function App() {
           });
         }
       } else if (hasFirebase) {
-        await addDoc(collection(db, "expenses"), expenseData);
+        await withTimeout(addDoc(collection(db, "expenses"), expenseData), 45000, "Save expense");
       } else {
         const newExp = { id: Date.now().toString(), ...expenseData };
         const updated = [newExp, ...expenses];
@@ -288,7 +344,10 @@ export default function App() {
       setIsVolunteerMode(false);
     } catch (err) {
       console.error(err);
-      alert("Error saving expense. Please check your connection.");
+      const msg =
+        err && typeof err === "object" && "message" in err ? err.message : String(err);
+      const code = err && typeof err === "object" && "code" in err ? ` (${err.code})` : "";
+      alert(`Error saving expense${code}: ${msg}`);
     } finally {
       setIsUploading(false);
     }
@@ -304,13 +363,21 @@ export default function App() {
   };
 
   const deleteExpenseById = async (id) => {
-    if (!window.confirm("Delete this record permanently?")) return;
-    if (hasFirebase) {
-      await deleteDoc(doc(db, "expenses", id));
-    } else {
-      const updated = expenses.filter((ex) => ex.id !== id);
-      setExpenses(updated);
-      localStorage.setItem("trip_expenses", JSON.stringify(updated));
+    try {
+      if (!window.confirm("Delete this record permanently?")) return;
+      if (hasFirebase) {
+        if (!db) throw new Error("Firestore is not initialized. Check your Firebase env variables.");
+        await withTimeout(deleteDoc(doc(db, "expenses", id)), 45000, "Delete expense");
+      } else {
+        const updated = expenses.filter((ex) => ex.id !== id);
+        setExpenses(updated);
+        localStorage.setItem("trip_expenses", JSON.stringify(updated));
+      }
+    } catch (err) {
+      console.error(err);
+      const msg =
+        err && typeof err === "object" && "message" in err ? err.message : String(err);
+      alert(`Error deleting expense: ${msg}`);
     }
   };
 
