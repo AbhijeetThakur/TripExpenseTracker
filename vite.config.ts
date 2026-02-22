@@ -15,7 +15,6 @@ export default defineConfig(({ mode }) => {
         'import.meta.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'import.meta.env.FB_API_KEY': JSON.stringify(env.FB_API_KEY),
         'import.meta.env.FB_PROJECT_ID': JSON.stringify(env.FB_PROJECT_ID),
-        'import.meta.env.FB_STORAGE_BUCKET': JSON.stringify(env.FB_STORAGE_BUCKET),
         'import.meta.env.FB_APP_ID': JSON.stringify(env.FB_APP_ID),
 
         // Back-compat for any remaining process.env usages (should be removable later)
@@ -23,7 +22,6 @@ export default defineConfig(({ mode }) => {
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.FB_API_KEY': JSON.stringify(env.FB_API_KEY),
         'process.env.FB_PROJECT_ID': JSON.stringify(env.FB_PROJECT_ID),
-        'process.env.FB_STORAGE_BUCKET': JSON.stringify(env.FB_STORAGE_BUCKET),
         'process.env.FB_APP_ID': JSON.stringify(env.FB_APP_ID),
       },
       resolve: {
